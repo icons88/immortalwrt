@@ -1,0 +1,74 @@
+name: Build ImmortalWrt x86 with Plugins
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04  # 使用 Ubuntu 22.04 环境
+    timeout-minutes: 240   # 延长超时时间
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up environment
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y \
+          build-essential libncurses5-dev libncursesw5-dev zlib1g-dev \
+          gawk git gettext libssl-dev xsltproc rsync wget unzip \
+          python3 python3-dev python3-pip python3-venv python3-lib2to3 \
+          subversion libelf-dev asciidoc binutils
+        sudo ln -sf /usr/bin/python3 /usr/bin/python  # 强制链接 Python3
+        python3 -m pip install --upgrade pip wheel setuptools
+
+    - name: Clone ImmortalWrt source
+      run: |
+        git clone https://github.com/immortalwrt/immortalwrt.git --depth=1
+        cd immortalwrt
+        git checkout master  # 使用稳定分支
+
+    - name: Add custom plugin feeds
+      run: |
+        cd immortalwrt
+        # 添加插件源
+        echo "src-git turboacc https://github.com/chenmozhijin/turboacc.git" >> feeds.conf.default
+        echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
+        echo "src-git uugamebooster https://github.com/immortalwrt/packages.git;openwrt-21.02" >> feeds.conf.default
+        echo "src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git" >> feeds.conf.default
+        echo "src-git smartdns https://github.com/pymumu/smartdns.git" >> feeds.conf.default
+
+    - name: Update and install feeds
+      run: |
+        cd immortalwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Auto-configure plugins
+      run: |
+        cd immortalwrt
+        make defconfig
+        # 启用插件及其依赖
+        sed -i 's/# CONFIG_PACKAGE_turboacc is not set/CONFIG_PACKAGE_turboacc=y/' .config
+        sed -i 's/# CONFIG_PACKAGE_luci-app-passwall is not set/CONFIG_PACKAGE_luci-app-passwall=y/' .config
+        sed -i 's/# CONFIG_PACKAGE_ipt2socks is not set/CONFIG_PACKAGE_ipt2socks=y/' .config
+        sed -i 's/# CONFIG_PACKAGE_luci-app-uugamebooster is not set/CONFIG_PACKAGE_luci-app-uugamebooster=y/' .config
+        sed -i 's/# CONFIG_PACKAGE_luci-app-adguardhome is not set/CONFIG_PACKAGE_luci-app-adguardhome=y/' .config
+        sed -i 's/# CONFIG_PACKAGE_smartdns is not set/CONFIG_PACKAGE_smartdns=y/' .config
+        sed -i 's/# CONFIG_PACKAGE_miniupnpd is not set/CONFIG_PACKAGE_miniupnpd=y/' .config
+        # 保存配置
+        make oldconfig
+
+    - name: Build firmware
+      run: |
+        cd immortalwrt
+        make -j$(nproc) V=s  # 并行编译，输出详细日志
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: immortalwrt-x86-plugins
+        path: immortalwrt/bin/targets/x86/64/
